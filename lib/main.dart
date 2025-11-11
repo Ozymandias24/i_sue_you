@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'dart:io';
 import 'dart:async'; 
+import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 void main() {
@@ -52,6 +53,12 @@ class _CallScreenState extends State<CallScreen> {
         isSerious = true;
       });
     }
+    if (condition == "0") {
+      setState(() {
+        isDangerMode = false;
+        isSerious = false;
+      });
+    }
     
   }
 
@@ -71,13 +78,16 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void initState() {
-    super.initState();
+  super.initState();
 
-    // 5초마다 녹음 및 업로드 함수 실행
-    _recordingTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      _recordAndUpload();
-    });
-  }
+  // 최초 1회 즉시 시작 → 틱 사이 공백 제거
+  _rotate(); 
+
+  // 이후 주기적으로 "종료→즉시 재시작" 수행
+  _recordingTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+    _rotate();
+  });
+}
 
   @override
   void dispose() {
@@ -85,48 +95,66 @@ class _CallScreenState extends State<CallScreen> {
     super.dispose();
   }
 
-  /// 🔹 기존 FloatingActionButton의 로직을 함수로 분리
-  Future<void> _recordAndUpload() async {
-    if (isUploading) return; // 업로드 중이면 중복 실행 방지
-
+  
+  /// 녹음 세그먼트 회전: (1) 진행 중이면 stop → 즉시 새 파일로 start, 이전 파일 업로드
+  ///                   (2) 미진행이면 즉시 start
+  void _rotate() {
     if (isRecording) {
-      // 녹음 중이면 중단하고 업로드
-      audioRecorder.stop().then((filePath) {
-        if (filePath != null) {
-          setState(() {
-            isRecording = false;
-            recordingPath = filePath;
-            number += 1;
+      audioRecorder.stop().then((prevPath) {
+        if (prevPath != null) {
+          // 다음 세그먼트 즉시 시작 (공백 0)
+          final String dirPath = '/storage/emulated/0/Download'; // 필요시 변경
+          final String nextName = "${number + 1}.mp3";
+          final String nextPath = p.join(dirPath, nextName);
+
+          audioRecorder
+              .start(const RecordConfig(), path: nextPath)
+              .then((_) {
+            setState(() {
+              isRecording = true;
+              recordingPath = null;
+              number += 1;
+            });
           });
 
-          debugPrint('녹음 종료 및 업로드 시작: $filePath');
-
-          // 비동기 업로드, await 없이 실행
-          sendAudioToServer(filePath);
+          // 이전 세그먼트 업로드는 병렬 처리
+          sendAudioToServer(prevPath);
+        } else {
+          // stop 실패 시 안전하게 재시작 시도
+          final String dirPath = '/storage/emulated/0/Download';
+          final String nextName = "${number + 1}.mp3";
+          final String nextPath = p.join(dirPath, nextName);
+          audioRecorder.hasPermission().then((granted) {
+            if (!granted) return;
+            audioRecorder.start(const RecordConfig(), path: nextPath).then((_) {
+              setState(() {
+                isRecording = true;
+                recordingPath = null;
+                number += 1;
+              });
+            });
+          });
         }
       });
-    } else {
-      // 녹음 시작
-      if (await audioRecorder.hasPermission()) {
-        final Directory appDocumentsDir = await getApplicationDocumentsDirectory();
-        final String fileName = "$number.mp3";
-        final String filePath = p.join(appDocumentsDir.path, fileName);
+    } 
+    else {
+      audioRecorder.hasPermission().then((granted) {
+        if (!granted) return;
+        final String dirPath = '/storage/emulated/0/Download';
+        final String fileName = "${number + 1}.mp3";
+        final String filePath = p.join(dirPath, fileName);
 
-        debugPrint("녹음 시작: $filePath");
-
-        
-        audioRecorder.start(
-          const RecordConfig(),
-          path: filePath,
-        );
-
-        setState(() {
-          isRecording = true;
-          recordingPath = null;
+        audioRecorder.start(const RecordConfig(), path: filePath).then((_) {
+          setState(() {
+            isRecording = true;
+            recordingPath = null;
+            number += 1;
+          });
         });
-      }
+      });
     }
   }
+
 
   // 🔹 기존 build 함수에는 FloatingActionButton 제거
   @override
@@ -174,37 +202,47 @@ class _CallScreenState extends State<CallScreen> {
     );
   }
 
-  Future<void> sendAudioToServer(String filePath) async {
-    setState(() {
-      isUploading = true;
-    });
+  void sendAudioToServer(String filePath) {
+    if (mounted) {
+      setState(() {
+        isUploading = true;
+      });
+    }
 
     try {
       final uri = Uri.parse('http://192.168.35.3:8000/uploadAudio');
 
+      // MultipartRequest 객체 생성 (동기)
       var request = http.MultipartRequest('POST', uri);
-      var audioFile = await http.MultipartFile.fromPath(
+
+      // 파일 추가 (비동기 Future)
+      http.MultipartFile.fromPath(
         'file',
         filePath,
         filename: p.basename(filePath),
-      );
-      request.files.add(audioFile);
+      ).then((audioFile) {
+        request.files.add(audioFile);
 
-      request.fields['recording_number'] = number.toString();
-      request.fields['timestamp'] = DateTime.now().toIso8601String();
+        request.fields['recording_number'] = number.toString();
+        request.fields['timestamp'] = DateTime.now().toIso8601String();
 
-      var response = await request.send();
-
-      if (response.statusCode == 200) {
-        final responseBody = response.stream.bytesToString();
-        debugPrint('✅ 업로드 성공: $responseBody');
-        setState(() {
-          condition = responseBody.toString();
+        // 실제 전송 (비동기)
+        request.send().then((response) {
+          if (response.statusCode == 200) {
+            response.stream.bytesToString().then((responseBody) {
+              debugPrint('✅ 업로드 성공: $responseBody');
+              if (mounted) {
+                setState(() {
+                  condition = responseBody.toString();
+                });
+                toggleMode(); // 모드 전환
+              }
+            });
+          } else {
+            debugPrint('❌ 업로드 실패: ${response.statusCode}');
+          }
         });
-        toggleMode(); //모드전환 검토
-      } else {
-        debugPrint('❌ 업로드 실패: ${response.statusCode}');
-      }
+      });
     } catch (e) {
       debugPrint('🚨 업로드 중 오류: $e');
     } finally {
@@ -215,6 +253,37 @@ class _CallScreenState extends State<CallScreen> {
       }
     }
   }
+
+Future<void> sttGet(BuildContext context) async {
+  try {
+    final uri_stt = Uri.parse('http://192.168.35.3:8000/sttGet');
+    final response = await http.get(uri_stt);
+
+    if (response.statusCode == 200) {
+      // 서버에서 받은 텍스트를 디코딩 (utf-8 고려)
+      final String sttText = utf8.decode(response.bodyBytes);
+
+      // 새 페이지로 이동
+      
+    } else {
+      debugPrint('❌ STT 요청 실패: ${response.statusCode}');
+      _showSnackBar(context, '서버 응답 오류: ${response.statusCode}');
+    }
+  } catch (e) {
+    debugPrint('🚨 STT 요청 중 예외 발생: $e');
+    _showSnackBar(context, '서버 연결 실패: $e');
+  }
+}
+
+
+void _showSnackBar(BuildContext context, String message) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(message),
+      backgroundColor: Colors.redAccent,
+    ),
+  );
+}
 
   // 공통 하단 영역
   Widget _buildCommonFooter() {

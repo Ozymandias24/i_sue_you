@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../main.dart';
+
 
 class SafeScreen extends StatelessWidget {
   const SafeScreen({Key? key}) : super(key: key);
