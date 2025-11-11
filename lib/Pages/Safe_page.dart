@@ -78,7 +78,7 @@ class SafeScreen extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               _buildStatItem('최근 6개월 통화', '0회'),
-              _buildStatItem('마지막 통화', '87개월 전'),
+              _buildStatItem('마지막 통화', '8개월 전'),
               _buildStatItem('평균 통화시간', '1분 이내'),
             ],
           ),

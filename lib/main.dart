@@ -5,9 +5,8 @@ import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'dart:io';
+import 'dart:async'; 
 import 'package:http/http.dart' as http;
-
-
 
 void main() {
   runApp(const MyApp());
@@ -37,15 +36,29 @@ class CallScreen extends StatefulWidget {
   State<CallScreen> createState() => _CallScreenState();
 }
 
-
 class _CallScreenState extends State<CallScreen> {
-  bool isDangerMode = false; // false = Safe 모드, true = Danger 모드
-
-  // 백엔드 신호를 시뮬레이션하는 함수 (나중에 실제 API로 교체)
+  bool isDangerMode = false;
+  bool isSerious = false;
+  String condition = "0";
   void toggleMode() {
+    if (condition == "1") {
+      setState(() {
+        isDangerMode = true;
+      });
+    }
+    if (condition == "2") {
+      setState(() {
+        isDangerMode = true;
+        isSerious = true;
+      });
+    }
+    
+  }
+
+  void tabMode() {
     setState(() {
       isDangerMode = !isDangerMode;
-    });
+    });    
   }
 
   final AudioRecorder audioRecorder = AudioRecorder();
@@ -54,76 +67,90 @@ class _CallScreenState extends State<CallScreen> {
   bool isRecording = false;
   bool isUploading = false;
   int number = 0;
-
-
+  Timer? _recordingTimer; 
 
   @override
+  void initState() {
+    super.initState();
+
+    // 5초마다 녹음 및 업로드 함수 실행
+    _recordingTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      _recordAndUpload();
+    });
+  }
+
+  @override
+  void dispose() {
+    _recordingTimer?.cancel();
+    super.dispose();
+  }
+
+  /// 🔹 기존 FloatingActionButton의 로직을 함수로 분리
+  Future<void> _recordAndUpload() async {
+    if (isUploading) return; // 업로드 중이면 중복 실행 방지
+
+    if (isRecording) {
+      // 녹음 중이면 중단하고 업로드
+      audioRecorder.stop().then((filePath) {
+        if (filePath != null) {
+          setState(() {
+            isRecording = false;
+            recordingPath = filePath;
+            number += 1;
+          });
+
+          debugPrint('녹음 종료 및 업로드 시작: $filePath');
+
+          // 비동기 업로드, await 없이 실행
+          sendAudioToServer(filePath);
+        }
+      });
+    } else {
+      // 녹음 시작
+      if (await audioRecorder.hasPermission()) {
+        final Directory appDocumentsDir = await getApplicationDocumentsDirectory();
+        final String fileName = "$number.mp3";
+        final String filePath = p.join(appDocumentsDir.path, fileName);
+
+        debugPrint("녹음 시작: $filePath");
+
+        
+        audioRecorder.start(
+          const RecordConfig(),
+          path: filePath,
+        );
+
+        setState(() {
+          isRecording = true;
+          recordingPath = null;
+        });
+      }
+    }
+  }
+
+  // 🔹 기존 build 함수에는 FloatingActionButton 제거
+  @override
   Widget build(BuildContext context) {
-    return FloatingActionButton(
-      onPressed: isUploading ? null : () async {
-        if (isRecording) {
-          String? filePath = await audioRecorder.stop();
-          if (filePath != null) {
-            setState(() {
-              isRecording = false;
-              recordingPath = filePath;
-              number += 1;
-            });
-
-            debugPrint(number.toString());
-            // Send the recorded file to server
-            await sendAudioToServer(filePath);
-          }
-        }
-        else {
-          if (await audioRecorder.hasPermission()) {
-
-            final Directory appDocumentsDir =
-            await getApplicationDocumentsDirectory();
-            debugPrint("file "+appDocumentsDir.path);
-
-            // Use unique filename with timestamp
-            final String fileName = "${number}.mp3";
-            final String filePath = p.join(appDocumentsDir.path, fileName);
-
-
-
-            debugPrint("file "+fileName+" saved at: "+filePath);
-
-            await audioRecorder.start(
-              const RecordConfig(),
-              path: filePath,
-            );
-
-            setState(() {
-              isRecording = true;
-              recordingPath = null;
-            });
-          }
-        }
-      },
-      child: Icon(
-        isRecording ? Icons.stop : Icons.mic,
-      ),
-    );
-
     return Scaffold(
       body: SafeArea(
         child: Column(
           children: [
-            // ========== 상단 모드 전환 버튼 (테스트용) ==========
+            // ========== 상단 모드 전환 버튼 ==========
             Container(
               width: double.infinity,
-              margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              margin:
+                  const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
               child: ElevatedButton(
-                onPressed: toggleMode,
+                onPressed: tabMode,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: isDangerMode ? Colors.red : Colors.green,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 12.0),
                 ),
                 child: Text(
-                  isDangerMode ? '🚨 DANGER 모드 (탭하여 SAFE로 전환)' : '✅ SAFE 모드 (탭하여 DANGER로 전환)',
+                  isDangerMode
+                      ? '🚨 DANGER 모드 (탭하여 SAFE로 전환)'
+                      : '✅ SAFE 모드 (탭하여 DANGER로 전환)',
                   style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 14,
@@ -132,14 +159,14 @@ class _CallScreenState extends State<CallScreen> {
               ),
             ),
 
-            // ========== 조건부 렌더링: Safe 또는 Danger 화면 ==========
+            // ========== 조건부 렌더링 ==========
             Expanded(
               child: isDangerMode
-                  ?  DangerScreen() // Danger 모드
-                  : const SafeScreen(),  // Safe 모드
+                  ? DangerScreen()
+                  : const SafeScreen(),
             ),
 
-            // ========== 공통 하단 버튼들 ==========
+            // ========== 하단 공통 버튼 ==========
             _buildCommonFooter(),
           ],
         ),
@@ -153,56 +180,33 @@ class _CallScreenState extends State<CallScreen> {
     });
 
     try {
-      // Replace with your server URL
-      final uri = Uri.parse('http://192.168.1.164:8000/uploadAudio');
+      final uri = Uri.parse('http://192.168.35.3:8000/uploadAudio');
 
-      // Create multipart request
       var request = http.MultipartRequest('POST', uri);
-
-      // Add the audio file
       var audioFile = await http.MultipartFile.fromPath(
-        'file', // Field name expected by your server
+        'file',
         filePath,
         filename: p.basename(filePath),
       );
       request.files.add(audioFile);
 
-      // Add additional fields if needed
       request.fields['recording_number'] = number.toString();
       request.fields['timestamp'] = DateTime.now().toIso8601String();
 
-      // Optional: Add authentication headers
-      // request.headers['Authorization'] = 'Bearer YOUR_TOKEN';
-
-      // Send the request
       var response = await request.send();
 
       if (response.statusCode == 200) {
-        // Success
-        final responseBody = await response.stream.bytesToString();
-        debugPrint('Upload successful: $responseBody');
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Audio uploaded successfully!')),
-          );
-        }
+        final responseBody = response.stream.bytesToString();
+        debugPrint('✅ 업로드 성공: $responseBody');
+        setState(() {
+          condition = responseBody.toString();
+        });
+        toggleMode(); //모드전환 검토
       } else {
-        // Error
-        debugPrint('Upload failed: ${response.statusCode}');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Upload failed: ${response.statusCode}')),
-          );
-        }
+        debugPrint('❌ 업로드 실패: ${response.statusCode}');
       }
     } catch (e) {
-      debugPrint('Error uploading audio: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
+      debugPrint('🚨 업로드 중 오류: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -212,12 +216,11 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
-  // 공통 하단 영역 (페이지 인디케이터, 컨트롤 버튼, 종료 버튼)
+  // 공통 하단 영역
   Widget _buildCommonFooter() {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // 페이지 인디케이터
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -240,10 +243,7 @@ class _CallScreenState extends State<CallScreen> {
             ),
           ],
         ),
-
         const SizedBox(height: 12),
-
-        // 하단 컨트롤 버튼
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12.0),
           child: Row(
@@ -257,10 +257,7 @@ class _CallScreenState extends State<CallScreen> {
             ],
           ),
         ),
-
         const SizedBox(height: 12),
-
-        // 종료 버튼
         Container(
           width: 60,
           height: 60,
@@ -274,13 +271,13 @@ class _CallScreenState extends State<CallScreen> {
             size: 28,
           ),
         ),
-
         const SizedBox(height: 16),
       ],
     );
   }
 
-  Widget _buildControlButton(IconData icon, String label, {bool isRecording = false}) {
+  Widget _buildControlButton(IconData icon, String label,
+      {bool isRecording = false}) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -288,7 +285,9 @@ class _CallScreenState extends State<CallScreen> {
           width: 48,
           height: 48,
           decoration: BoxDecoration(
-            color: isRecording ? const Color(0xFF4A5568) : const Color(0xFF3A3A3C),
+            color: isRecording
+                ? const Color(0xFF4A5568)
+                : const Color(0xFF3A3A3C),
             shape: BoxShape.circle,
           ),
           child: Icon(
@@ -309,4 +308,3 @@ class _CallScreenState extends State<CallScreen> {
     );
   }
 }
-
