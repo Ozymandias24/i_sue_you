@@ -30,6 +30,8 @@ class _DangerScreenState extends State<DangerScreen> {
 
   static const String _sttUrl = 'http://192.168.35.3:8000/sttGet';
 
+
+
   void _nextProtocol() {
     setState(() {
       _currentIndex = (_currentIndex + 1) % _protocols.length;
@@ -75,6 +77,8 @@ class _DangerScreenState extends State<DangerScreen> {
       SnackBar(content: Text(msg), backgroundColor: Colors.redAccent),
     );
   }
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -175,8 +179,8 @@ class _DangerScreenState extends State<DangerScreen> {
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
           child: Row(
+            mainAxisAlignment: MainAxisAlignment.end, // 오른쪽 정렬
             children: [
-              const Spacer(),
               ElevatedButton.icon(
                 onPressed: _toggleSttView,
                 icon: const Icon(Icons.subtitles),
@@ -188,11 +192,21 @@ class _DangerScreenState extends State<DangerScreen> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
               ),
+              const SizedBox(width: 12), // 버튼 간 간격
+              ElevatedButton.icon(
+                onPressed: () { /* no-op: 실제 전화 안 걸림 */ },
+                icon: const Icon(Icons.call),
+                label: const Text('112에 신고하기'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF3A3A3C),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
             ],
           ),
         ),
-
-        const SizedBox(height: 5),
       ],
     );
   }

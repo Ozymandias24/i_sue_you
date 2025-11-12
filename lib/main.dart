@@ -9,6 +9,8 @@ import 'dart:io';
 import 'dart:async'; 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 void main() {
   runApp(const MyApp());
@@ -45,26 +47,66 @@ class _CallScreenState extends State<CallScreen> {
   bool isDangerMode = false;
   bool isSerious = false;
   String condition = "0";
+  final AudioPlayer _fx = AudioPlayer(); // 효과음용 단일 플레이어
+
+
+  Future<void> _playToggleFx({required bool toDanger, required bool isSerious}) async {
+    try {
+      // 이전 재생 중이면 정지 후 재생 (겹침 방지)
+      await _fx.stop();
+      // 필요하면 볼륨 조정 (0.0 ~ 1.0)
+      await _fx.setVolume(1.0);
+
+      String assetPath;
+      if (toDanger||isSerious) {
+        assetPath = 'assets/Dangerous.mp3';
+      }
+      else{
+        assetPath = 'assets/Safe.mp3';
+      }
+
+
+      await _fx.play(AssetSource(assetPath.replaceFirst('assets/', '')));
+      // 참고: AssetSource 는 pubspec에 등록된 경로 기준(assets/는 빼고 적음)
+      // 위에서 replaceFirst로 자동 변환
+    } catch (e) {
+      debugPrint('🎵 효과음 재생 실패: $e');
+    }
+  }
+
   void toggleMode() {
+    // 🔸 현재 상태 저장
+    final wasDanger = isDangerMode;
+    final wasSerious = isSerious;
+
+    // 🔸 조건->다음 상태 계산 (화면 전환 로직과 동일)
+    bool nextDanger = false;
+    bool nextSerious = false;
+
     if (condition == "1") {
-      setState(() {
-        isDangerMode = true;
-      });
-    }
-    if (condition == "2") {
-      setState(() {
-        isDangerMode = true;
-        isSerious = true;
-      });
-    }
-    if (condition == "0") {
-      setState(() {
-        isDangerMode = false;
-        isSerious = false;
-      });
+      nextDanger = true;
+      nextSerious = false;
+    } else if (condition == "2") {
+      nextDanger = true;
+      nextSerious = true;
+    } else if (condition == "0") {
+      nextDanger = false;
+      nextSerious = false;
     }
 
+    // 🔸 실제 상태 반영
+    setState(() {
+      isDangerMode = nextDanger;
+      isSerious   = nextSerious;
+    });
+
+    // 🔸 "전환"이 발생했을 때만 효과음 재생
+    final changed = (wasDanger != nextDanger) || (wasSerious != nextSerious);
+    if (changed) {
+      _playToggleFx(toDanger: nextDanger, isSerious: nextSerious);
+    }
   }
+
 
   void tabMode() {
     setState(() {
@@ -102,70 +144,82 @@ class _CallScreenState extends State<CallScreen> {
 
   /// 녹음 세그먼트 회전: (1) 진행 중이면 stop → 즉시 새 파일로 start, 이전 파일 업로드
   ///                   (2) 미진행이면 즉시 start
-  void _rotate() {
+  // 상단 import 유지
+// import 'package:path_provider/path_provider.dart';
+// import 'package:path/path.dart' as p;
+// import 'dart:io';
 
-    audioRecorder.hasPermission().then((granted) {
-      debugPrint("🎤 녹음 권한 상태: $granted");
-      if (!granted) {
-        debugPrint("🚫 녹음 권한 거부됨 (에뮬레이터에서는 마이크가 비활성화된 경우가 많음)");
-        return;
-      }
-    });
+  Future<void> _rotate() async {
+    // 1) 권한 확인
+    final granted = await audioRecorder.hasPermission();
+    debugPrint("🎤 녹음 권한 상태: $granted");
+    if (!granted) {
+      debugPrint("🚫 녹음 권한 없음 - 에뮬레이터 마이크/권한 설정 확인 필요");
+      return;
+    }
 
+    // 2) 안전한 저장 경로(앱 임시 디렉토리) + 올바른 확장자/인코딩
+    final dir = await getTemporaryDirectory();
+    final nextPath = p.join(dir.path, "${number + 1}.m4a");
 
+    // 3) 회전 로직
     if (isRecording) {
-      audioRecorder.stop().then((prevPath) {
-        if (prevPath != null) {
-          // 다음 세그먼트 즉시 시작 (공백 0)
-          final String dirPath = '/storage/emulated/0/Download'; // 필요시 변경
-          final String nextName = "${number + 1}.mp3";
-          final String nextPath = p.join(dirPath, nextName);
+      final prevPath = await audioRecorder.stop();
 
-          audioRecorder
-              .start(const RecordConfig(), path: nextPath)
-              .then((_) {
-            setState(() {
-              isRecording = true;
-              recordingPath = null;
-              number += 1;
-            });
-          });
+      // 바로 다음 세그먼트 시작 (공백 최소화)
+      await audioRecorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc, // ✔ AAC
+          bitRate: 128000,
+          sampleRate: 44100,
+        ),
+        path: nextPath,
+      );
 
-          // 이전 세그먼트 업로드는 병렬 처리
+      setState(() {
+        isRecording = true;
+        recordingPath = nextPath;
+        number += 1;
+      });
+
+      // 이전 세그먼트 업로드 (파일 크기 확인)
+      if (prevPath != null) {
+        final f = File(prevPath);
+        final len = await f.length();
+        debugPrint("업로드 전 파일 크기: $len bytes - $prevPath");
+        if (len > 1024) {
+          // 1KB 이하(사실상 빈 파일)면 업로드 생략
           sendAudioToServer(prevPath);
         } else {
-          // stop 실패 시 안전하게 재시작 시도
-          final String dirPath = '/storage/emulated/0/Download';
-          final String nextName = "${number + 1}.mp3";
-          final String nextPath = p.join(dirPath, nextName);
-          audioRecorder.hasPermission().then((granted) {
-            if (!granted) return;
-            audioRecorder.start(const RecordConfig(), path: nextPath).then((_) {
-              setState(() {
-                isRecording = true;
-                recordingPath = null;
-                number += 1;
-              });
-            });
-          });
+          debugPrint("⚠️ 파일이 비어 업로드 생략: $prevPath");
         }
+      }
+    } else {
+      await audioRecorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 128000,
+          sampleRate: 44100,
+        ),
+        path: nextPath,
+      );
+
+      setState(() {
+        isRecording = true;
+        recordingPath = nextPath;
+        number += 1;
       });
     }
-    else {
-      audioRecorder.hasPermission().then((granted) {
-        if (!granted) return;
-        final String dirPath = '/storage/emulated/0/Download';
-        final String fileName = "${number + 1}.mp3";
-        final String filePath = p.join(dirPath, fileName);
 
-        audioRecorder.start(const RecordConfig(), path: filePath).then((_) {
-          setState(() {
-            isRecording = true;
-            recordingPath = null;
-            number += 1;
-          });
-        });
-      });
+
+
+
+
+    @override
+    void dispose() {
+      _recordingTimer?.cancel();
+      _fx.dispose(); // 🔹 리소스 정리
+      super.dispose();
     }
   }
 
@@ -216,59 +270,60 @@ class _CallScreenState extends State<CallScreen> {
     );
   }
 
-  void sendAudioToServer(String filePath) {
+  Future<void> sendAudioToServer(String filePath) async {
     if (mounted) {
-      setState(() {
-        isUploading = true;
-      });
+      setState(() => isUploading = true);
     }
 
     try {
+      final f = File(filePath);
+      if (!await f.exists()) {
+        debugPrint("❌ 파일 없음: $filePath");
+        return;
+      }
+      final len = await f.length();
+      if (len <= 1024) {
+        debugPrint("⚠️ 너무 작은 파일(빈 파일로 간주) 업로드 생략: $len bytes");
+        return;
+      }
+
       final uri = Uri.parse('http://192.168.35.3:8000/uploadAudio');
+      final request = http.MultipartRequest('POST', uri);
 
-      // MultipartRequest 객체 생성 (동기)
-      var request = http.MultipartRequest('POST', uri);
-
-      // 파일 추가 (비동기 Future)
-      http.MultipartFile.fromPath(
+      // 확장자 .m4a로 보낼 것
+      final mf = await http.MultipartFile.fromPath(
         'file',
         filePath,
         filename: p.basename(filePath),
-      ).then((audioFile) {
-        request.files.add(audioFile);
+        // contentType 힌트를 주면 일부 서버에서 인식이 더 안정적
+        // import 'package:http_parser/http_parser.dart';
+        contentType: MediaType('audio', 'mp4'), // m4a는 컨테이너가 mp4 계열
+      );
 
-        request.fields['recording_number'] = number.toString();
-        request.fields['timestamp'] = DateTime.now().toIso8601String();
+      request.files.add(mf);
+      request.fields['recording_number'] = number.toString();
+      request.fields['timestamp'] = DateTime.now().toIso8601String();
 
-        // 실제 전송 (비동기)
-        request.send().then((response) {
-          if (response.statusCode == 200) {
-            response.stream.bytesToString().then((responseBody) {
-              debugPrint('✅ 업로드 성공: $responseBody');
-              if (mounted) {
-                setState(() {
-                  condition = responseBody.toString();
-                });
-                toggleMode(); // 모드 전환
-              }
-            });
-          } else {
-            debugPrint('❌ 업로드 실  ㅜ : ${response.statusCode}');
-          }
-        });
-      });
+      final response = await request.send();
+      if (response.statusCode == 200) {
+        final body = await response.stream.bytesToString();
+        debugPrint('✅ 업로드 성공: $body');
+        if (mounted) {
+          setState(() => condition = body.toString());
+          toggleMode();
+        }
+      } else {
+        debugPrint('❌ 업로드 실패: ${response.statusCode}');
+      }
     } catch (e) {
       debugPrint('🚨 업로드 중 오류: $e');
     } finally {
-      if (mounted) {
-        setState(() {
-          isUploading = false;
-        });
-      }
+      if (mounted) setState(() => isUploading = false);
     }
   }
 
-Future<void> sttGet(BuildContext context) async {
+
+  Future<void> sttGet(BuildContext context) async {
   try {
     final uri_stt = Uri.parse('http://192.168.35.3:8000/sttGet');
     final response = await http.get(uri_stt);
@@ -341,20 +396,26 @@ void _showSnackBar(BuildContext context, String message) {
           ),
         ),
         const SizedBox(height: 12),
-        Container(
-          width: 60,
-          height: 60,
-          decoration: const BoxDecoration(
-            color: Color(0xFFE85D5D),
-            shape: BoxShape.circle,
+        // 끊기 버튼
+        GestureDetector(
+          onTap: () {
+            Navigator.pop(context); // 홈으로 돌아감
+          },
+          child: Container(
+            width: 60,
+            height: 60,
+            decoration: const BoxDecoration(
+              color: Color(0xFFE85D5D),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.call_end,
+              color: Colors.white,
+              size: 28,
+            ),
           ),
-          child: const Icon(
-            Icons.call_end,
-            color: Colors.white,
-            size: 28,
-          ),
-        ),
-        const SizedBox(height: 16),
+        )
+
       ],
     );
   }
@@ -391,3 +452,5 @@ void _showSnackBar(BuildContext context, String message) {
     );
   }
 }
+
+
