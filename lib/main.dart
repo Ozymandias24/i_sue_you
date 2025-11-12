@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../Pages/Danger_page.dart';
 import '../Pages/Safe_page.dart';
+import '../Pages/home_page.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -24,7 +25,10 @@ class MyApp extends StatelessWidget {
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF1C1C1E),
       ),
-      home: const CallScreen(),
+      home: const HomePage(), // 시작 페이지
+      routes: {
+        '/call': (context) => const CallScreen(),
+      },
     );
   }
 }
@@ -59,13 +63,13 @@ class _CallScreenState extends State<CallScreen> {
         isSerious = false;
       });
     }
-    
+
   }
 
   void tabMode() {
     setState(() {
       isDangerMode = !isDangerMode;
-    });    
+    });
   }
 
   final AudioRecorder audioRecorder = AudioRecorder();
@@ -74,14 +78,14 @@ class _CallScreenState extends State<CallScreen> {
   bool isRecording = false;
   bool isUploading = false;
   int number = 0;
-  Timer? _recordingTimer; 
+  Timer? _recordingTimer;
 
   @override
   void initState() {
   super.initState();
 
   // 최초 1회 즉시 시작 → 틱 사이 공백 제거
-  _rotate(); 
+  _rotate();
 
   // 이후 주기적으로 "종료→즉시 재시작" 수행
   _recordingTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
@@ -95,10 +99,20 @@ class _CallScreenState extends State<CallScreen> {
     super.dispose();
   }
 
-  
+
   /// 녹음 세그먼트 회전: (1) 진행 중이면 stop → 즉시 새 파일로 start, 이전 파일 업로드
   ///                   (2) 미진행이면 즉시 start
   void _rotate() {
+
+    audioRecorder.hasPermission().then((granted) {
+      debugPrint("🎤 녹음 권한 상태: $granted");
+      if (!granted) {
+        debugPrint("🚫 녹음 권한 거부됨 (에뮬레이터에서는 마이크가 비활성화된 경우가 많음)");
+        return;
+      }
+    });
+
+
     if (isRecording) {
       audioRecorder.stop().then((prevPath) {
         if (prevPath != null) {
@@ -136,7 +150,7 @@ class _CallScreenState extends State<CallScreen> {
           });
         }
       });
-    } 
+    }
     else {
       audioRecorder.hasPermission().then((granted) {
         if (!granted) return;
@@ -239,7 +253,7 @@ class _CallScreenState extends State<CallScreen> {
               }
             });
           } else {
-            debugPrint('❌ 업로드 실패: ${response.statusCode}');
+            debugPrint('❌ 업로드 실  ㅜ : ${response.statusCode}');
           }
         });
       });
@@ -264,7 +278,7 @@ Future<void> sttGet(BuildContext context) async {
       final String sttText = utf8.decode(response.bodyBytes);
 
       // 새 페이지로 이동
-      
+
     } else {
       debugPrint('❌ STT 요청 실패: ${response.statusCode}');
       _showSnackBar(context, '서버 응답 오류: ${response.statusCode}');

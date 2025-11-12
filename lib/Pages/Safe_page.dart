@@ -117,7 +117,7 @@ class SafeScreen extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: const [
                     Text(
-                      '어보이드패싱 어플리케이션이 통화 상황을 분석 중입니다!',
+                      '어보이드피싱 어플리케이션이 통화 상황을 분석 중입니다!',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 13,
@@ -126,7 +126,7 @@ class SafeScreen extends StatelessWidget {
                     ),
                     SizedBox(height: 4),
                     Text(
-                      '통화 내용은 AI가 분석합니다. 만화, 음악 등 보이스피싱으로 추정되는 내용이 있을 경우 어보이드패싱에서 대처법을 알려드리겠습니다!',
+                      '통화 내용은 AI가 분석합니다.  보이스피싱으로 추정되는 내용이 있을 경우 어보이드패싱에서 대처법을 알려드리겠습니다!',
                       style: TextStyle(
                         color: Colors.white70,
                         fontSize: 11,
